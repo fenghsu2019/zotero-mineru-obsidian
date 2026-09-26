@@ -1,0 +1,157 @@
+# 验证记录与复测步骤
+
+验证日期：2026-09-26。本文区分已经执行的检查、自动化测试覆盖和仍需执行的实机步骤，不以 XPI 存在或 Node.js 测试通过代替 Zotero 运行验证。
+
+## 0.2.1 多 collection 勾选表格
+
+发布文件为 `dist/mineru-obsidian-sync-0.2.1.xpi`。设置页已将 collection 下拉框改为可滚动的勾选表格，展示名称、完整路径和文献库，支持多选、搜索、只看已选、全选当前结果和清空选择。旧版单 collection 配置仍可读取；保存时保留任务 ID 并转换为 `collections` 数组。
+
+后端将所有勾选项及可选子分类合并处理，同一 collection、文献和 PDF 附件按 Zotero 身份去重。选中项已删除或无法找到时明确报错，在读取部分文献或开始导出前停止该任务。
+
+本次已执行完整自动化测试，共 **51 项通过**。其中新增的 11 项 `tests/zotero.test.js` 使用内存中的模拟 Zotero API 和目录模型，不接触真实资料库，覆盖以下行为：
+
+- 旧单项配置、默认参数和原任务 ID 保留；显式清空选择不回退到旧配置。
+- 重复选择去重、字符串库 ID 规范化、不同文献库的相同 collection key 保留。
+- 表格所需名称、路径、层级和文献库字段；排除已删除 collection 和订阅库。
+- 多根分类、父子重叠、重复文献、独立 PDF 和无 PDF 文献的统计。
+- 失效选中项中止任务；同步引擎只收到一批去重后的附件，报告覆盖数量一致。
+
+实机验证：通过 Zotero 10.0.4 的插件管理器从本地 XPI 升级至 0.2.1，管理器显示新版本并保持启用；在真实 Gecko 设置窗口完成以下检查：
+
+- 0.2.0 曾复用旧 CSS，读取活动窗口的 CSS 规则证实仍为旧版。0.2.1 的窗口、CSS 和 JS URL 均带版本参数；构建时从 manifest 注入资源版本，并由发布测试检查。
+- 截图确认新表格四列排版正常，没有下拉框重叠。运行时 body 为 flex；表格滚动区外高 224 px、内高 222 px，overflow 为 auto；底部操作栏边界与 830 px 视口底部一致。
+- 搜索 radiation 并勾选，改搜 building 后原选择保留；再勾选 climate/building，清空搜索并打开“只看已选”，正确显示两行且均已勾选。
+- 表头批量取消正常；搜索 adaptation 得到 12 行，点击“全选当前结果”得到 12 项已选；“清空已选”后恢复 0 项，并清空搜索显示全部 172 个 collection。
+- 使用已安装插件的实际 Zotero 适配器，只读比较 adaptation 与 adaptation 加 radiation 子分类，均返回 87 个 PDF 附件，父子重叠选择没有重复。
+
+本轮未保存测试配置或执行正式同步，测试勾选已清空；旧配置迁移通过模拟 API 测试验证。文件选择器、多任务切换、定时器和完整安装后写入流程仍需按下文步骤验证；已有真实缓存预览和临时目录写入记录见后文。
+
+## 0.1.1 安装失败修复与 Zotero 10 校验
+
+用户报告 0.1.0 无法安装后，在当前 Zotero 10.0.4 上通过 `AddonManager.getInstallForFile()` 复现：`state: 4`、`error: -3`（`ERROR_CORRUPT_FILE`），没有解析出 addon。控制台的确定错误是 `Reading manifest: applications.zotero.update_url not provided`。
+
+核对 Zotero 10 官方文档与本机实际安装器源码：
+
+- `Extension.sys.mjs` 强制要求 `applications.zotero.id`、`update_url` 和 `strict_max_version`。0.1.0 漏了 `update_url`；此前仅检查 ZIP 完整性未覆盖该自定义校验。
+- Zotero 10 官方兼容上限为 `10.0.*`，现有上限正确；插件已有 `getSelectedCollections()` 分支，支持新版 collection 多选 API。
+- `XPIDatabase.sys.mjs` 在默认更新安全策略下会禁用非 HTTPS 更新地址。测试中的内嵌 `data:` 地址虽然通过清单解析，但得到 `appDisabled: true`，已弃用且未安装。
+- 0.1.1 使用明确用于手动发行的 HTTPS `.invalid` 保留域名；不更改任何 Zotero 安全设置。该地址不会提供在线更新，需手动安装新版。
+
+最终 0.1.1 包的实际校验结果：
+
+```json
+{
+  "zoteroVersion": "10.0.4",
+  "state": 3,
+  "error": 0,
+  "checkUpdateSecurity": true,
+  "addon": {
+    "id": "mineru-obsidian-sync@fengxu.local",
+    "version": "0.1.1",
+    "isCompatible": true,
+    "appDisabled": false,
+    "userDisabled": false,
+    "blocklistState": 0
+  }
+}
+```
+
+以上调用只解析安装包，没有执行 `install()`、关闭安全检查或更改个人 Zotero 配置。仍未声称安装后全流程通过。构建脚本已增加 Zotero 必填字段、HTTPS 更新地址及版本一致性检查，防止再次产出同类无效安装包。
+
+## 已执行：本机 API 与只读源码加载
+
+环境为 macOS，Zotero 10.0.2。通过 Zotero 进程内的只读脚本检查，未安装插件、未调用插件 `start()`、未改菜单、同步配置、论文或缓存，也未进行目标仓库写入。
+
+- 核对本机应用包中 bootstrap、菜单、集合、附件、群组库、文件选择器和文件操作接口。
+- 确认 `IOUtils`、`PathUtils`、`Services`、`ChromeUtils` 和文本编解码器可以从 Zotero 主窗口取得。
+- 将 `core.js`、`engine.js`、`zotero.js` 加载到临时脚本对象。验证了 `loadSubScript` 的 `globalThis` 作用域差异，并验证显式绑定目标作用域后的导出可用。
+- 实际执行集合枚举，用户库返回 172 个集合；样例集合读取 21 个父级文献条目、22 个 PDF 附件，未附 PDF 条目为 0，Zotero 跳转 URI 结构检查通过。这只是 API 样例，不代表这些论文都已生成缓存或成功导出。
+- 实测不存在路径上的 `nsIFile.isSymlink()` 和 `normalize()` 会抛文件不存在异常，作为路径检查修复依据。
+
+当前用户库没有群组库，因此 `groupID` 来自本机 `Zotero.Group` 源码核对，不列为群组同步实测。
+
+### 已执行：真实缓存预览
+
+在 Zotero 10.0.2 内加载最新源码，以只读方式对两个实际附件执行同步引擎的预览。结果为计划新增 2 篇、29 张图片、冲突 0、缺文件 0、失败 0，预览后专用临时目标目录仍为空。
+
+| 附件 ID | 父条目 ID | 文献 | 图片结果 |
+|---|---|---|---|
+| 127626 | 127627 | Efficient outdoor thermal comfort via radiant cooling and infrared-reflective walls | 14 个既有引用、14 张图片 |
+| 134853 | 134854 | Warming-driven shifts in global building energy use reshape climate mitigation planning | 从 manifest 恢复 15 个引用、15 张图片 |
+
+两份 `full.md` 均存在于 `<zotero-data-dir>/llm-for-zotero-mineru/<附件 ID>/full.md`。第二份缓存沿用原 skill 的渐进偏移兼容规则，在末尾两处分别补齐 8 和 21 个换行，报告保留相应提示；未删除图注或正文。此预览验证文件路径和引用完整性，未逐图人工核对恢复位置的语义。
+
+### 历史检查：0.1.x 设置页渲染
+
+用合成数据在本机临时浏览器页面加载相同设置页、样式与交互脚本，检查页面截图、输入及预览按钮；布局无重叠，预览统计和逐项报告正常显示。XHTML XML 解析通过。该检查使用模拟 Zotero API，不能代替安装后的 Gecko 设置窗口与原生文件选择器验证。
+
+bootstrap 源码在 Zotero 中加载成功；实际确认启动/关闭回调、主窗口枚举、工具菜单及 collection 右键菜单挂载点存在。未执行个人配置内的安装或启动回调。
+
+### 已执行：真实缓存的本地文件导出
+
+使用 `scripts/smoke-local.js` 及 Node.js 文件适配器，对上述两个真实缓存分别运行完整同步。目标是两个专用临时目录，没有写入当前知识库的 `raw/`。
+
+- 预览：目标目录保持为空，写入计数为 0。
+- 第一次同步：分别生成 1 篇 Markdown 和 14 / 15 张图片，全部本地图片引用可重解析且对应文件存在；目标图片逐字节等于缓存源图。
+- 第二次同步：两次各返回 `unchanged: 1`，写入计数为 0。
+- 两次运行前后的源 `full.md`、manifest、来源元数据及被引用图片逐字节一致。
+
+复测命令（目标目录必须提前创建且为空；`--filename` 可选）：
+
+```sh
+node scripts/smoke-local.js \
+  --cache-root /path/to/llm-for-zotero-mineru \
+  --attachment ATTACHMENT_ID:ATTACHMENT_KEY:LIBRARY_ID \
+  --output /path/to/empty-test-vault
+```
+
+这验证了真实输入与磁盘输出；Zotero 内使用 `IOUtils` 的实际写入和安装后全流程仍未实测。连接器的写脚本恢复日志接口不接受本次纯文件测试脚本，因此未通过该接口执行真实写入，改用上述本地文件适配器完成端到端核查。
+
+## 自动化测试
+
+在本项目目录使用 Node.js 20 或更新版本运行：
+
+```sh
+npm test
+```
+
+测试使用可丢弃的临时目录和合成输入，不修改真实 Zotero 缓存或 Obsidian 文献。覆盖内容包括：
+
+- Markdown、HTML 和引用式图片路径；代码块、行内代码和注释中的伪图片标记；Unicode 路径及长文件名。
+- frontmatter、相对链接、仅复制被引用图片，以及 manifest 图片恢复、错误位置、来源文件名不匹配和歧义拒绝。
+- 首次同步、第二次无变化不写入、预览零写入、托管文件覆盖和手动编辑保护。
+- 既有非托管文件冲突、缺少图片或正文、重复集合成员、附件重命名后的稳定路径。
+- 不安全路径、符号链接、损坏状态、读取期间源文件变化、状态提交失败后的恢复与重试。
+
+0.1.0 的核心与同步测试共 36 项通过。0.1.1 新增 4 项打包回归（缺失更新地址、不安全更新地址、版本不一致、正常包生成）。本次新增 11 项多 collection 适配器测试，合计 51 项实际运行全部通过。打包回归在独立临时目录执行，不改动真实缓存或正式安装包。
+
+打包检查：
+
+```sh
+python3 scripts/build.py
+```
+
+脚本按版本清单生成 XPI；本版输出为 `dist/mineru-obsidian-sync-0.2.1.xpi`，并检查 ZIP 完整性和必需入口文件。该检查不证明插件已安装或能够在所有声明版本启动。
+
+## 尚需记录结果的实机检查
+
+以下步骤是复测清单，未标注通过的项目不视为已完成。优先使用单独的测试仓库和少量已有缓存的附件；不要在原始 PDF 或 MinerU 缓存中构造故障。
+
+1. 从 Zotero **工具 → 插件 → 齿轮 → 从文件安装插件** 安装生成的 XPI，确认工具菜单及 collection 右键入口出现。
+2. 打开设置窗口，检查 collection 表格无重叠、可滚动，并测试逐行勾选、搜索、只看已选、全选当前结果和清空已选；过滤前后的已选项应保持一致。核对旧单 collection 规则显示为已勾选项，以及多项保存、关闭重开和规则切换。检查文件夹选择；停用插件后菜单和窗口应清理。
+3. 指向可丢弃的目标目录执行预览，核对目录没有新增正文、图片或状态文件。缺失缓存应显示可理解的错误。
+4. 对含图片的已有 MinerU 附件执行实际同步，打开 Markdown，检查 YAML、相对图片链接、图片显示和 Zotero 跳转。源缓存保持不变。
+5. 再执行一次，确认未变化条目不重写。手动修改目标副本，分别核对保护模式的冲突报告和覆盖模式的更新行为。
+6. 使用单独的合成缓存副本测试缺图与无效 manifest，确认受影响附件拒绝导出且其他附件仍能处理。不要改动真实缓存。
+7. 将规则从配置中移除，确认导出文件保留。通过测试用 collection 验证移出成员不删除目标文献。
+8. 启用定时同步并保存，保持 Zotero 运行，确认按间隔或资料库变化进行检查；停用插件后不再启动新一轮同步。
+
+## 未验证环境与限制
+
+- Zotero 7–9、Windows 和 Linux 尚未运行验证；manifest 的范围只是安装声明。
+- 群组库、多个主窗口、跨设备迁移和真实云同步文件夹尚未运行验证。
+- Node.js 文件适配器测试不代替 Zotero 的 `IOUtils`、XPCOM 和界面验证。
+- 磁盘写满、进程在写入中被强制终止等真实故障尚未实测。自动化测试中的失败注入不能覆盖全部系统故障。
+- 基准副本保留历史代次，当前没有自动清理策略；长期磁盘占用需要由实际文献规模判断。
+
+接口依据见 [README.md 的官方参考](README.md#官方参考)。

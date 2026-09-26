@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>MinerU → Obsidian 同步</title>
+  <link rel="stylesheet" href="chrome://global/skin/global.css" />
+  <link rel="stylesheet" href="chrome://mineru-obsidian/content/settings.css?v=__VERSION__" />
+  <script src="chrome://mineru-obsidian/content/settings.js?v=__VERSION__"></script>
+</head>
+<body>
+  <header><h1>MinerU → Obsidian</h1><p>勾选需要同步的 collection，将论文 Markdown 和图片同步到本地仓库。</p></header>
+  <main>
+    <div class="saved"><span id="rules-label">同步任务</span><div id="rules" class="rule-list" role="group" aria-labelledby="rules-label"></div><button id="new">新建</button><button id="remove" class="quiet">移除配置</button></div>
+    <section class="collection-section" aria-labelledby="collection-heading">
+      <div class="section-heading"><h2 id="collection-heading">Zotero collections</h2><span id="selection-count" role="status" aria-live="polite">已选 0 个</span></div>
+      <div class="collection-toolbar"><input id="collection-search" type="search" aria-label="搜索 collection" placeholder="搜索名称、完整路径或文献库" /><button id="select-visible">全选当前结果</button><button id="clear-selection" class="quiet">清空已选</button><label><input id="selected-only" type="checkbox" /> 只看已选</label></div>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Collection 勾选表格">
+        <table id="collection-table">
+          <colgroup><col class="check-col" /><col class="name-col" /><col /><col class="library-col" /></colgroup>
+          <thead><tr><th scope="col"><input id="select-all-visible" type="checkbox" aria-label="勾选或取消当前结果" /></th><th scope="col">Collection</th><th scope="col">完整路径</th><th scope="col">文献库</th></tr></thead>
+          <tbody id="collection-rows"><tr><td colspan="4">正在加载 collections…</td></tr></tbody>
+        </table>
+      </div>
+      <p class="hint" id="collection-hint">可同时勾选多个 collection；搜索不会清除已选项，同一 PDF 只同步一次。</p>
+      <div class="options"><label><input id="children" type="checkbox" checked="checked" /> 包含所选 collection 的子分类</label><label><input id="restore" type="checkbox" checked="checked" /> 恢复有可靠位置的图片标记</label></div>
+    </section>
+    <section class="grid" aria-label="同步设置">
+      <label for="vault">Obsidian 仓库</label><div class="browse"><input id="vault" placeholder="选择仓库根目录" /><button id="browse-vault">选择文件夹</button></div>
+      <label for="papers">Markdown 子目录</label><input id="papers" value="raw/papers" />
+      <label for="assets">图片子目录</label><input id="assets" value="raw/assets/mineru" />
+      <label for="cache">MinerU 缓存目录</label><div class="browse"><input id="cache" placeholder="自动检测 Zotero 数据目录" /><button id="browse-cache">选择文件夹</button></div>
+      <span id="mode-label">已有导出文件</span><div class="mode-options" role="radiogroup" aria-labelledby="mode-label"><label><input id="mode-overwrite" type="radio" name="mode" value="overwrite" checked="checked" /> 以 Zotero 缓存覆盖更新</label><label><input id="mode-protect" type="radio" name="mode" value="protect" /> 保留手动编辑，报告冲突</label></div>
+    </section>
+    <div class="options"><label><input id="auto" type="checkbox" /> Zotero 运行时自动同步</label><label>每 <input id="interval" type="number" min="1" max="1440" value="10" /> 分钟检查</label></div>
+    <p class="hint">覆盖模式更新本插件管理的正文及图片。手写笔记请另建文件；移出 collection 的论文保留。</p>
+    <section class="report"><div id="status" role="status" aria-live="polite">勾选 collection 并设置目标仓库，然后预览同步。</div><pre id="report">预览不会写入任何文件。</pre></section>
+  </main>
+  <footer class="actions"><button id="save">保存配置</button><button id="preview">预览同步</button><button id="sync" class="primary">立即同步</button><button id="last" class="quiet">上次报告</button></footer>
+</body>
+</html>

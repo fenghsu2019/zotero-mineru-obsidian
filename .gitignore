@@ -1,0 +1,6 @@
+.DS_Store
+node_modules/
+__pycache__/
+*.pyc
+dist/*.xpi
+!dist/mineru-obsidian-sync-0.2.1.xpi
