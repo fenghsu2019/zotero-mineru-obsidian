@@ -23,7 +23,7 @@ Obsidian 中的 wiki 页面
 
 ## 安装与第一次同步
 
-1. 下载本项目的 [`dist/mineru-obsidian-sync-0.2.1.xpi`](dist/mineru-obsidian-sync-0.2.1.xpi)。已安装旧版时，直接从文件安装新版即可升级；已有同步配置保留。
+1. 打开 [GitHub Releases](https://github.com/fenghsu2019/zotero-mineru-obsidian/releases/latest)，在 **Assets** 中下载 `mineru-obsidian-sync-0.2.1.xpi`。已安装旧版时，直接从文件安装新版即可升级；已有同步配置保留。
 2. 在 Zotero 中打开 **工具 → 插件**，点击齿轮，选择 **从文件安装插件**，选中该 XPI。
 3. 打开 **工具 → MinerU → Obsidian 同步…**。也可以通过 collection 右键菜单打开同步设置。
 4. 在表格中勾选一个或多个 collection，再选择已存在的 Obsidian 仓库根目录。默认 Markdown 子目录为 `raw/papers`，图片子目录为 `raw/assets/mineru`，可以修改。
