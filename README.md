@@ -1,4 +1,4 @@
-# MinerU → Obsidian Sync
+# Md2Obsidian
 
 一个 Zotero 插件，把 [LLM for Zotero](https://github.com/yilewang/llm-for-zotero) 调用 MinerU 解析 PDF 后生成的 Markdown 和引用图片，按所选 collection 单向同步到本地 Obsidian 仓库。它连接的是 **Zotero 中的论文解析结果** 与 **Obsidian 中的原始资料目录**，适合用作 [Karpathy LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 工作流的论文输入。
 
@@ -23,9 +23,9 @@ Obsidian 中的 wiki 页面
 
 ## 安装与第一次同步
 
-1. 打开 [GitHub Releases](https://github.com/fenghsu2019/zotero-mineru-obsidian/releases/latest)，在 **Assets** 中下载 `mineru-obsidian-sync-0.2.1.xpi`。已安装旧版时，直接从文件安装新版即可升级；已有同步配置保留。
+1. 从 [GitHub Releases](https://github.com/fenghsu2019/zotero-mineru-obsidian/releases/latest) 的 **Assets** 下载 `mineru-obsidian-sync-0.2.7.xpi`。已安装旧版时，从文件安装新版即可升级；已有同步配置保留。
 2. 在 Zotero 中打开 **工具 → 插件**，点击齿轮，选择 **从文件安装插件**，选中该 XPI。
-3. 打开 **工具 → MinerU → Obsidian 同步…**。也可以通过 collection 右键菜单打开同步设置。
+3. 打开 **Zotero → 设置 → Md2Obsidian**（macOS；Windows/Linux 在 **编辑 → 设置**）。工具菜单和 collection 右键菜单也能直达该设置面板。
 4. 在表格中勾选一个或多个 collection，再选择已存在的 Obsidian 仓库根目录。默认 Markdown 子目录为 `raw/papers`，图片子目录为 `raw/assets/mineru`，可以修改。
 5. MinerU 缓存根目录留空时，使用 Zotero 数据目录中的 `llm-for-zotero-mineru`；如果实际缓存另存他处，选择对应根目录。
 6. 点击 **预览同步**，查看新增、更新、缺文件、冲突和失败条目。预览不写入导出文件、状态或报告。
@@ -43,7 +43,7 @@ Obsidian 中的 wiki 页面
 
 ## 自动同步与更新规则
 
-默认手动同步。勾选 **Zotero 运行时自动同步** 并保存后，插件按所设间隔检查；默认 10 分钟，可设置为 1–1440 分钟。Zotero 资料库变化会让下一次轮询提前检查已启用规则。关闭 Zotero 后不再执行，插件不会注册系统后台任务。
+默认手动同步。勾选 **Zotero 运行时自动同步** 并保存后，可选每隔 1–1440 分钟、每天指定本地时间，或每隔 1–365 天在指定本地时间运行。旧配置继续使用默认的 10 分钟间隔。首次保存定时配置后，第一次执行安排在下一个指定时间；之后按所选天数重复。实际运行时间最多可能比设定时间晚约一分钟。手动同步会重新计算分钟间隔，但不改变每天或每 N 天的固定时刻。Zotero 关闭期间若错过了计划时间，下次启动后补执行一次，不会把错过的多次任务逐个补跑。关闭 Zotero 后不再执行，插件不会注册系统后台任务。
 
 默认的 **以 Zotero 缓存覆盖更新** 模式会更新本插件已经管理的 Markdown 和图片，包含你对这些导出文件做过的修改。自己的阅读笔记请另建文件并链接到导出文献；需要直接编辑导出文件时，可选 **保留手动编辑，报告冲突**。后一模式将目标文件与上次导出的基准副本比较，发现本地修改时跳过该附件并报告冲突。
 
@@ -91,7 +91,7 @@ Markdown 文件名为 `<PDF stem>--<libraryID>-<attachmentKey>.md`。文件名�
 
 图片恢复依赖现有 manifest 的文件名、字符长度、位置和置信度校验。这能发现多种过时或不匹配缓存，但不能证明 MinerU 识别出的内容与原 PDF 完全一致，恢复结果仍值得抽查。插件保持 Zotero 缓存原样。
 
-运行结果可在面板查看；实际同步结束后尝试写入 `.zotero-mineru-sync/last-report.json`。`missing` 表示缓存或图片缺失，`conflict` 表示目标内容冲突，`failed` 表示路径、manifest、状态文件或写入等其他错误。查看具体条目的错误原因后处理，再运行预览。
+运行结果可在面板查看；实际同步结束后尝试写入 `.zotero-mineru-sync/last-report.json`。报告不列出未变化的附件及其数量。`missing` 表示缓存或图片缺失，`conflict` 表示目标内容冲突，`failed` 表示路径、manifest、状态文件或写入等其他错误。查看具体条目的错误原因后处理，再运行预览。
 
 插件在本机读写文件，不向外部服务上传论文或调用云端接口。仓库若已经启用 Obsidian Sync、iCloud 或其他同步服务，仍受这些服务的现有设置影响。用于比较的方式是正文和文件字节与基准副本直接比较。
 

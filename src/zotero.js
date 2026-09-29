@@ -1,10 +1,10 @@
 (function (global) {
   "use strict";
   const PREF = "extensions.mineru-obsidian-sync.rules";
+  const SCHEDULE_PREF = "extensions.mineru-obsidian-sync.schedule";
   const MENU_ID = "mineru-obsidian-sync-menu";
   const CONTEXT_ID = "mineru-obsidian-sync-context";
-  let timer, notifier, running = null, stopped = true, dialog;
-  let lastRuns = new Map();
+  let timer, running = null, stopped = true, paneID;
   const windows = new Set();
 
   function file(path) {
@@ -85,10 +85,38 @@
     const normalized = validateRule(rule);
     const rules = getRules();
     const index = rules.findIndex(value => value.id === normalized.id);
+    const previous = rules[index];
     if (index < 0) rules.push(normalized); else rules[index] = normalized;
     Zotero.Prefs.set(PREF, JSON.stringify(rules), true);
-    lastRuns.set(normalized.id, Date.now());
+    if (!normalized.autoSync) clearSchedule(normalized.id);
+    else if (!previous || !previous.autoSync || ["scheduleType", "intervalMinutes", "intervalDays", "scheduleTime"]
+      .some(key => previous[key] !== normalized[key])) setNextRun(normalized);
     return normalized;
+  }
+  function scheduleState() {
+    try {
+      const value = JSON.parse(Zotero.Prefs.get(SCHEDULE_PREF, true) || "{}");
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    } catch (error) { Zotero.logError(error); return {}; }
+  }
+  function clearSchedule(id) {
+    const state = scheduleState();
+    delete state[id];
+    Zotero.Prefs.set(SCHEDULE_PREF, JSON.stringify(state), true);
+  }
+  function nextScheduledAt(rule, now = Date.now(), previousDue = null) {
+    if (rule.scheduleType === "interval") return now + rule.intervalMinutes * 60000;
+    const [hours, minutes] = rule.scheduleTime.split(":").map(Number);
+    const days = rule.scheduleType === "days" ? rule.intervalDays : 1;
+    const next = previousDue === null ? new Date(now) : new Date(previousDue);
+    next.setHours(hours, minutes, 0, 0);
+    while (next.getTime() <= now) next.setDate(next.getDate() + (previousDue === null ? 1 : days));
+    return next.getTime();
+  }
+  function setNextRun(rule, now = Date.now(), previousDue = null) {
+    const state = scheduleState();
+    state[rule.id] = nextScheduledAt(rule, now, previousDue);
+    Zotero.Prefs.set(SCHEDULE_PREF, JSON.stringify(state), true);
   }
   function collectionSelections(rule) {
     // An explicitly empty selection must not fall back to stale legacy fields.
@@ -132,14 +160,22 @@
       throw new Error("正文目录和图片目录必须分开。");
     }
     if (!["overwrite", "protect"].includes(rule.mode)) throw new Error("无效的覆盖模式。");
-    const intervalMinutes = Number(rule.intervalMinutes || 10);
-    if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 1440) {
+    const scheduleType = rule.scheduleType || "interval";
+    if (!["interval", "daily", "days"].includes(scheduleType)) throw new Error("无效的自动同步方式。");
+    const intervalMinutes = Number(rule.intervalMinutes ?? 10);
+    if (scheduleType === "interval" && (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 1440)) {
       throw new Error("同步间隔请输入 1–1440 分钟的整数。");
     }
+    const intervalDays = Number(rule.intervalDays ?? 2);
+    if (scheduleType === "days" && (!Number.isInteger(intervalDays) || intervalDays < 1 || intervalDays > 365)) {
+      throw new Error("天数请输入 1–365 的整数。");
+    }
+    const scheduleTime = rule.scheduleTime ?? "09:00";
+    if (scheduleType !== "interval" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(scheduleTime)) throw new Error("指定时间请输入有效的 24 小时时间。");
     const label = rule.label || collections[0].label + (collections.length > 1 ? ` 等 ${collections.length} 个 collection` : "");
     return { id: rule.id || Services.uuid.generateUUID().toString(), label, collections,
       libraryID: collections[0].libraryID, collectionKey: collections[0].collectionKey, vaultPath,
-      cacheRoot, papersDir, assetsDir, intervalMinutes, mode: rule.mode,
+      cacheRoot, papersDir, assetsDir, intervalMinutes, intervalDays, scheduleType, scheduleTime, mode: rule.mode,
       includeSubcollections: rule.includeSubcollections !== false,
       restoreImages: rule.restoreImages !== false, autoSync: !!rule.autoSync };
   }
@@ -230,7 +266,7 @@
     return { attachments: records.sort((a, b) => a.id - b.id), parentCount: parents.size, withoutPDF, collectionCount: visited.size };
   }
 
-  async function runRule(rule, dryRun = true, onProgress) {
+  async function runRule(rule, dryRun = true, onProgress, scheduledDue = null) {
     if (running) throw new Error("已有同步正在运行，请稍后再试。");
     const normalized = validateRule(rule);
     running = (async () => {
@@ -240,7 +276,9 @@
         attachments: coverage.attachments, dryRun, onProgress });
       const report = { started, finished: new Date().toISOString(), rule: normalized,
         coverage: { collections: coverage.collectionCount, parentItems: coverage.parentCount,
-          pdfAttachments: coverage.attachments.length, itemsWithoutPDF: coverage.withoutPDF }, ...result };
+          pdfAttachments: coverage.attachments.length, itemsWithoutPDF: coverage.withoutPDF }, ...result,
+        counts: Object.fromEntries(Object.entries(result.counts).filter(([status]) => status !== "unchanged")),
+        items: (result.items || []).filter(item => item.status !== "unchanged") };
       api.lastReport = report;
       if (!dryRun) {
         const io = makeIO(normalized.vaultPath);
@@ -250,8 +288,14 @@
       }
       return report;
     })();
-    try { return await running; }
-    finally { running = null; lastRuns.set(normalized.id, Date.now()); }
+    try {
+      const report = await running;
+      if (!dryRun && normalized.autoSync && getRules().some(saved => saved.id === normalized.id)
+          && (scheduledDue !== null || normalized.scheduleType === "interval")) {
+        setNextRun(normalized, Date.now(), scheduledDue);
+      }
+      return report;
+    } finally { running = null; }
   }
 
   async function tick() {
@@ -259,15 +303,25 @@
     try {
       for (const rule of getRules()) {
         if (stopped || running) break;
-        if (!rule.autoSync || Date.now() - (lastRuns.get(rule.id) || 0) < Number(rule.intervalMinutes || 10) * 60000) continue;
+        if (!rule.autoSync) continue;
+        let normalized, due;
         try {
-          const report = await runRule(rule, false);
+          due = scheduleState()[rule.id];
+          if (Number.isFinite(due) && Date.now() < due) continue;
+          normalized = validateRule(rule);
+          if (!Number.isFinite(due)) { setNextRun(normalized); continue; }
+          const report = await runRule(rule, false, undefined, due);
           if (report.counts.failed || report.counts.conflicts) {
             Zotero.debug("MinerU Obsidian Sync: " + JSON.stringify(report.counts));
             notify("自动同步有失败或冲突，请打开同步面板查看报告。");
           }
         } catch (error) {
-          lastRuns.set(rule.id, Date.now());
+          if (normalized) setNextRun(normalized, Date.now(), Number.isFinite(due) ? due : null);
+          else {
+            const state = scheduleState();
+            state[rule.id] = Date.now() + 10 * 60000;
+            Zotero.Prefs.set(SCHEDULE_PREF, JSON.stringify(state), true);
+          }
           api.lastReport = { error: error.message, rule: rule.label };
           Zotero.logError(error);
           notify("同步失败：" + error.message);
@@ -281,20 +335,18 @@
   function notify(message) {
     try {
       const progress = new Zotero.ProgressWindow();
-      progress.changeHeadline("MinerU → Obsidian");
+      progress.changeHeadline("Md2Obsidian");
       progress.addDescription(message); progress.show(); progress.startCloseTimer(6000);
     } catch (error) { Zotero.logError(error); }
   }
   function openSettings() {
-    if (dialog && !dialog.closed) { dialog.focus(); return; }
-    dialog = Zotero.getMainWindow().openDialog("chrome://mineru-obsidian/content/settings.xhtml?v=" + encodeURIComponent(api.version),
-      "mineru-obsidian-settings", "chrome,centerscreen,resizable,width=1020,height=830", { api });
+    Zotero.Utilities.Internal.openPreferences(paneID);
   }
   function addWindow(window) {
     if (windows.has(window)) return;
     windows.add(window);
-    for (const [parentID, id, label] of [["menu_ToolsPopup", MENU_ID, "MinerU → Obsidian 同步…"],
-      ["zotero-collectionmenu", CONTEXT_ID, "MinerU → Obsidian 同步设置…"]]) {
+    for (const [parentID, id, label] of [["menu_ToolsPopup", MENU_ID, "Md2Obsidian…"],
+      ["zotero-collectionmenu", CONTEXT_ID, "Md2Obsidian 同步设置…"]]) {
       const parent = window.document.getElementById(parentID);
       if (!parent || window.document.getElementById(id)) continue;
       const item = window.document.createXULElement("menuitem");
@@ -309,11 +361,11 @@
 
   const api = {
     lastReport: null, getRules, saveRule, listCollections, selectedCollection, collectAttachments,
-    runRule, makeIO, validateRule, addWindow, removeWindow, openSettings,
+    runRule, makeIO, validateRule, nextScheduledAt, addWindow, removeWindow, openSettings,
     defaultCacheRoot: () => PathUtils.join(Zotero.DataDirectory.dir, "llm-for-zotero-mineru"),
     removeRule(id) {
       Zotero.Prefs.set(PREF, JSON.stringify(getRules().filter(rule => rule.id !== id)), true);
-      lastRuns.delete(id);
+      clearSchedule(id);
     },
     async chooseFolder(window, title) {
       let FilePicker;
@@ -322,24 +374,25 @@
       const picker = new FilePicker(); picker.init(window, title, picker.modeGetFolder);
       return await picker.show() === picker.returnOK ? picker.file : null;
     },
-    async start({ version = "dev" } = {}) {
+    async start({ id, version = "dev" } = {}) {
       api.version = version;
       stopped = false;
       Zotero.MineruObsidianSync = api;
+      const resource = "chrome://mineru-obsidian/content/";
+      const suffix = "?v=" + encodeURIComponent(version);
+      paneID = await Zotero.PreferencePanes.register({ pluginID: id, id: "mineru-obsidian-prefpane",
+        src: resource + "preferences.xhtml" + suffix,
+        scripts: [resource + "settings.js" + suffix],
+        stylesheets: [resource + "settings.css" + suffix],
+        label: "Md2Obsidian", image: resource + "icons/md2obsidian.png" });
       for (const window of Zotero.getMainWindows()) addWindow(window);
-      notifier = Zotero.Notifier.registerObserver({ notify() {
-        // Polling also sees completed MinerU jobs, which need not emit Zotero notifications.
-        // Expire due times, but keep event handling free of filesystem work.
-        for (const rule of getRules()) if (rule.autoSync) lastRuns.set(rule.id, 0);
-      } }, ["item", "collection", "collection-item"], "mineru-obsidian-sync");
       timer = setTimeout(tick, 60000);
     },
     async stop() {
       stopped = true; clearTimeout(timer);
-      if (notifier) Zotero.Notifier.unregisterObserver(notifier);
-      notifier = null;
       for (const window of [...windows]) removeWindow(window);
-      if (dialog && !dialog.closed) dialog.close();
+      if (paneID) Zotero.PreferencePanes.unregister(paneID);
+      paneID = null;
       if (running) { try { await running; } catch (_) {} }
       delete Zotero.MineruObsidianSync;
     },

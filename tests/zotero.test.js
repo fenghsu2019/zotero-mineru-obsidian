@@ -64,8 +64,11 @@ function fixture() {
   collection(51, "FEED0001", "Feed collection", [], { libraryID: 5 });
 
   const directories = new Set(["/vault", "/zotero", "/zotero/llm-for-zotero-mineru"]);
-  let saved = "", syncOptions;
+  const preferences = new Map();
+  let syncOptions, registeredPane, openedPane, unregisteredPane, timerCallback;
+  let syncResult = { counts: { failed: 0, conflicts: 0 }, warnings: [] };
   const context = vm.createContext({
+    setTimeout: callback => { timerCallback = callback; return 1; }, clearTimeout: () => {},
     Cc: { "@mozilla.org/file/local;1": { createInstance() {
       return {
         initWithPath(value) { this.path = value; }, normalize() { this.path = path.posix.normalize(this.path); },
@@ -77,7 +80,11 @@ function fixture() {
     Services: { uuid: { generateUUID: () => ({ toString: () => "test-rule-id" }) } },
     Zotero: {
       DataDirectory: { dir: "/zotero" },
-      Prefs: { get: () => saved, set: (_key, value) => { saved = value; } },
+      Prefs: { get: key => preferences.get(key), set: (key, value) => { preferences.set(key, value); } },
+      PreferencePanes: { register: async options => { registeredPane = options; return options.id; },
+        unregister: id => { unregisteredPane = id; } },
+      Utilities: { Internal: { openPreferences: id => { openedPane = id; } } },
+      getMainWindows: () => [],
       Libraries: { getAll: () => libraries, get: id => libraries.find(l => l.libraryID === id) },
       Collections: {
         get: id => collections.get(id),
@@ -92,15 +99,20 @@ function fixture() {
     MineruSyncCore: core,
     MineruSyncEngine: { sync: async options => {
       syncOptions = options;
-      return { counts: { failed: 0, conflicts: 0 }, warnings: [] };
+      return syncResult;
     } },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../src/zotero.js"), "utf8"), context);
   const baseRule = { id: "existing-rule", label: "Personal / Climate", libraryID: 1,
     collectionKey: "ROOT0001", vaultPath: "/vault", mode: "overwrite" };
   return { api: context.MineruObsidianPlugin, baseRule, collections, loads, lookups,
-    setRules: rules => { saved = JSON.stringify(rules); }, getSaved: () => JSON.parse(saved),
-    getSyncOptions: () => syncOptions };
+    setRules: rules => { preferences.set("extensions.mineru-obsidian-sync.rules", JSON.stringify(rules)); },
+    getSaved: () => JSON.parse(preferences.get("extensions.mineru-obsidian-sync.rules")),
+    getSchedule: () => JSON.parse(preferences.get("extensions.mineru-obsidian-sync.schedule") || "{}"),
+    setSchedule: value => { preferences.set("extensions.mineru-obsidian-sync.schedule", JSON.stringify(value)); },
+    setSyncResult: result => { syncResult = result; }, getSyncOptions: () => syncOptions,
+    paneActions: () => ({ registeredPane, openedPane, unregisteredPane }),
+    fireTimer: async () => timerCallback() };
 }
 
 // Convert VM objects to the host realm for strict structural assertions.
@@ -116,7 +128,65 @@ test("legacy single-collection rules normalize without losing identity or defaul
   assert.equal(rule.libraryID, 1);
   assert.equal(rule.includeSubcollections, true);
   assert.equal(rule.mode, "overwrite");
+  assert.equal(rule.scheduleType, "interval");
+  assert.equal(rule.intervalMinutes, 10);
   assert.equal(rule.cacheRoot, "/zotero/llm-for-zotero-mineru");
+});
+
+test("daily and multi-day schedules use local wall time and preserve the chosen cadence", () => {
+  const { api, baseRule } = fixture();
+  const daily = api.validateRule({ ...baseRule, scheduleType: "daily", scheduleTime: "09:15" });
+  const before = new Date(2026, 8, 29, 8, 30).getTime();
+  const after = new Date(2026, 8, 29, 10, 30).getTime();
+  assert.equal(api.nextScheduledAt(daily, before), new Date(2026, 8, 29, 9, 15).getTime());
+  assert.equal(api.nextScheduledAt(daily, after), new Date(2026, 8, 30, 9, 15).getTime());
+  const days = api.validateRule({ ...baseRule, scheduleType: "days", intervalDays: 3, scheduleTime: "09:15" });
+  const due = new Date(2026, 8, 29, 9, 15).getTime();
+  assert.equal(api.nextScheduledAt(days, new Date(2026, 9, 4, 10).getTime(), due),
+    new Date(2026, 9, 5, 9, 15).getTime());
+  assert.throws(() => api.validateRule({ ...baseRule, scheduleType: "days", intervalDays: 0 }), /天数/);
+  assert.throws(() => api.validateRule({ ...baseRule, scheduleType: "daily", scheduleTime: "25:00" }), /指定时间/);
+});
+
+test("saving an automatic rule records the next run and removing it clears the schedule", () => {
+  const { api, baseRule, getSchedule } = fixture();
+  const rule = api.saveRule({ ...baseRule, autoSync: true, scheduleType: "days", intervalDays: 2, scheduleTime: "09:00" });
+  assert.ok(Number.isFinite(getSchedule()[rule.id]));
+  api.removeRule(rule.id);
+  assert.equal(getSchedule()[rule.id], undefined);
+});
+
+test("startup registers a native Zotero preference pane and menu navigation targets it", async () => {
+  const { api, paneActions } = fixture();
+  await api.start({ id: "mineru-obsidian-sync@fengxu.local", version: "0.2.7" });
+  assert.equal(paneActions().registeredPane.id, "mineru-obsidian-prefpane");
+  assert.match(paneActions().registeredPane.src, /preferences\.xhtml\?v=0\.2\.7$/);
+  assert.equal(paneActions().registeredPane.label, "Md2Obsidian");
+  assert.match(paneActions().registeredPane.image, /icons\/md2obsidian\.png$/);
+  api.openSettings();
+  assert.equal(paneActions().openedPane, "mineru-obsidian-prefpane");
+  await api.stop();
+  assert.equal(paneActions().unregisteredPane, "mineru-obsidian-prefpane");
+});
+
+test("a missed scheduled run executes once after startup and advances the persisted due time", async () => {
+  const { api, baseRule, setSchedule, getSchedule, getSyncOptions, fireTimer } = fixture();
+  const rule = api.saveRule({ ...baseRule, autoSync: true, scheduleType: "days", intervalDays: 3, scheduleTime: "09:00" });
+  setSchedule({ [rule.id]: new Date(2026, 8, 20, 9).getTime() });
+  await api.start({ id: "mineru-obsidian-sync@fengxu.local", version: "0.2.7" });
+  await fireTimer();
+  assert.equal(getSyncOptions().dryRun, false);
+  assert.ok(getSchedule()[rule.id] > Date.now());
+  await api.stop();
+});
+
+test("run report omits unchanged entries while retaining changed and failed entries", async () => {
+  const { api, baseRule, setSyncResult } = fixture();
+  setSyncResult({ dryRun: true, counts: { created: 1, unchanged: 1, failed: 1, conflicts: 0 }, warnings: [],
+    items: [{ status: "unchanged", title: "Old" }, { status: "created", title: "New" }, { status: "failed", title: "Error" }] });
+  const report = await api.runRule(baseRule, true);
+  assert.deepEqual(report.items.map(item => item.status), ["created", "failed"]);
+  assert.equal(report.counts.unchanged, undefined);
 });
 
 test("multiple selections normalize numeric library IDs, deduplicate roots, and retain cross-library keys", () => {

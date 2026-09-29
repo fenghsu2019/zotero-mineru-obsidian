@@ -1,8 +1,9 @@
 {
   "manifest_version": 2,
-  "name": "MinerU → Obsidian Sync",
-  "version": "0.2.1",
+  "name": "Md2Obsidian",
+  "version": "0.2.7",
   "description": "Sync collection PDF Markdown and referenced MinerU images into a local Obsidian vault.",
+  "icons": { "48": "content/icons/md2obsidian.png", "96": "content/icons/md2obsidian.png" },
   "author": "Feng Xu",
   "applications": {
     "zotero": {

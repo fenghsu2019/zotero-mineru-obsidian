@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import zipfile
 from urllib.parse import urlparse
-from urllib.parse import quote
 
 root = Path(__file__).resolve().parents[1]
 manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
@@ -30,14 +29,9 @@ with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
     for path in sources:
         if path.is_file():
             name = path.relative_to(root).as_posix()
-            if name == "content/settings.xhtml":
-                # Gecko can retain chrome stylesheets across in-place upgrades.
-                markup = path.read_text(encoding="utf-8").replace("__VERSION__", quote(manifest["version"], safe=""))
-                archive.writestr(name, markup)
-            else:
-                archive.write(path, name)
+            archive.write(path, name)
 with zipfile.ZipFile(destination) as archive:
     assert archive.testzip() is None
-    for name in ("manifest.json", "bootstrap.js", "src/core.js", "src/engine.js", "src/zotero.js", "content/settings.xhtml", "content/settings.js"):
+    for name in ("manifest.json", "bootstrap.js", "src/core.js", "src/engine.js", "src/zotero.js", "content/preferences.xhtml", "content/settings.js", "content/icons/md2obsidian.png"):
         assert name in archive.namelist(), f"Missing {name}"
 print(destination)

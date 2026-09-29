@@ -1,0 +1,85 @@
+<div xmlns="http://www.w3.org/1999/xhtml" id="mineru-obsidian-pane" class="mineru-obsidian-pane">
+  <p class="intro">将 Zotero 分类中的 MinerU Markdown 和图片同步到本地 Obsidian 仓库。</p>
+
+  <section class="card task-section" aria-labelledby="mineru-obsidian-rules-label">
+    <div class="section-top">
+      <div>
+        <h2 id="mineru-obsidian-rules-label">同步任务</h2>
+        <p class="section-note">选择已有任务，或为另一组分类建立新任务。</p>
+      </div>
+      <div class="section-actions">
+        <button id="mineru-obsidian-new">新建任务</button>
+        <button id="mineru-obsidian-remove" class="quiet">移除配置</button>
+      </div>
+    </div>
+    <div id="mineru-obsidian-rules" class="rule-list" role="group" aria-labelledby="mineru-obsidian-rules-label"></div>
+  </section>
+
+  <section class="card collection-section" aria-labelledby="mineru-obsidian-collection-heading">
+    <div class="section-top">
+      <div>
+        <h2 id="mineru-obsidian-collection-heading">选择 Zotero 分类</h2>
+        <p class="section-note">可勾选多个分类，重复出现的 PDF 只同步一次。</p>
+      </div>
+      <span id="mineru-obsidian-selection-count" class="count" role="status" aria-live="polite">已选 0 个</span>
+    </div>
+    <div class="collection-toolbar">
+      <input id="mineru-obsidian-collection-search" type="search" aria-label="搜索 collection" placeholder="搜索分类名称、完整路径或文献库" />
+      <div class="collection-actions">
+        <button id="mineru-obsidian-select-visible">全选搜索结果</button>
+        <button id="mineru-obsidian-clear-selection" class="quiet">清空选择</button>
+        <label><input id="mineru-obsidian-selected-only" type="checkbox" /> 仅显示已选</label>
+      </div>
+    </div>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Collection 勾选表格">
+      <table id="mineru-obsidian-collection-table">
+        <colgroup><col class="check-col" /><col class="name-col" /><col /><col class="library-col" /></colgroup>
+        <thead><tr><th scope="col"><input id="mineru-obsidian-select-all-visible" type="checkbox" aria-label="勾选或取消当前结果" /></th><th scope="col">分类</th><th scope="col">完整路径</th><th scope="col">文献库</th></tr></thead>
+        <tbody id="mineru-obsidian-collection-rows"><tr><td colspan="4">正在加载分类…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="hint" id="mineru-obsidian-collection-hint">搜索只筛选显示，不会清除已选分类。</p>
+    <div class="options">
+      <label><input id="mineru-obsidian-children" type="checkbox" checked="checked" /> 包含子分类</label>
+      <label><input id="mineru-obsidian-restore" type="checkbox" checked="checked" /> 恢复有可靠位置的图片标记</label>
+    </div>
+  </section>
+
+  <section class="card destination-section" aria-labelledby="mineru-obsidian-destination-heading">
+    <div class="section-top"><div><h2 id="mineru-obsidian-destination-heading">导出位置与文件</h2><p class="section-note">正文与图片分别写入仓库内的子目录。</p></div></div>
+    <div class="grid">
+      <label for="mineru-obsidian-vault">Obsidian 仓库</label><div class="browse"><input id="mineru-obsidian-vault" placeholder="选择仓库根目录" /><button id="mineru-obsidian-browse-vault">选择文件夹</button></div>
+      <label for="mineru-obsidian-papers">Markdown 子目录</label><input id="mineru-obsidian-papers" value="raw/papers" />
+      <label for="mineru-obsidian-assets">图片子目录</label><input id="mineru-obsidian-assets" value="raw/assets/mineru" />
+      <label for="mineru-obsidian-cache">MinerU 缓存目录</label><div class="browse"><input id="mineru-obsidian-cache" placeholder="自动检测 Zotero 数据目录" /><button id="mineru-obsidian-browse-cache">选择文件夹</button></div>
+      <span id="mineru-obsidian-mode-label">已有导出文件</span><div class="mode-options" role="radiogroup" aria-labelledby="mineru-obsidian-mode-label"><label><input id="mineru-obsidian-mode-overwrite" type="radio" name="mineru-obsidian-mode" value="overwrite" checked="checked" /> 用 Zotero 缓存更新</label><label><input id="mineru-obsidian-mode-protect" type="radio" name="mineru-obsidian-mode" value="protect" /> 保留手动编辑并报告冲突</label></div>
+    </div>
+    <p class="hint">手写笔记建议另建文件；移出分类的论文不会自动删除。</p>
+  </section>
+
+  <section class="card schedule" aria-labelledby="mineru-obsidian-schedule-heading">
+    <div class="section-top"><div><h2 id="mineru-obsidian-schedule-heading">自动同步</h2><p class="section-note">仅在 Zotero 运行时执行。</p></div></div>
+    <label class="auto-toggle"><input id="mineru-obsidian-auto" type="checkbox" /> 启用自动同步</label>
+    <div class="schedule-fields">
+      <label for="mineru-obsidian-schedule-type">同步方式</label>
+      <select id="mineru-obsidian-schedule-type"><option value="interval">每隔若干分钟</option><option value="daily">每天指定时间</option><option value="days">每隔若干天</option></select>
+      <label id="mineru-obsidian-interval-label" for="mineru-obsidian-interval">间隔分钟</label><input id="mineru-obsidian-interval" type="number" min="1" max="1440" value="10" />
+      <label id="mineru-obsidian-days-label" for="mineru-obsidian-days">间隔天数</label><input id="mineru-obsidian-days" type="number" min="1" max="365" value="2" />
+      <label id="mineru-obsidian-time-label" for="mineru-obsidian-time">本地时间</label><input id="mineru-obsidian-time" type="time" value="09:00" />
+    </div>
+    <p class="hint">指定时间使用电脑本地时区；关闭 Zotero 时错过的任务会在下次启动后补执行一次。</p>
+  </section>
+
+  <section class="card report" aria-labelledby="mineru-obsidian-report-heading">
+    <div class="section-top"><div><h2 id="mineru-obsidian-report-heading">同步报告</h2><p class="section-note">预览不会写入文件。</p></div></div>
+    <div id="mineru-obsidian-status" role="status" aria-live="polite">勾选分类并设置目标仓库，然后预览同步。</div>
+    <pre id="mineru-obsidian-report">尚无报告。</pre>
+  </section>
+
+  <div class="actions">
+    <button id="mineru-obsidian-last" class="quiet">上次报告</button>
+    <button id="mineru-obsidian-save">保存配置</button>
+    <button id="mineru-obsidian-preview">预览同步</button>
+    <button id="mineru-obsidian-sync" class="primary">立即同步</button>
+  </div>
+</div>

@@ -80,7 +80,7 @@ test("current release builds an intact XPI with matching manifest and package me
   const inspected = spawnSync("python3", ["-c", [
     "import json, sys, zipfile",
     "with zipfile.ZipFile(sys.argv[1]) as archive:",
-    "    print(json.dumps({'manifest': json.loads(archive.read('manifest.json')), 'files': archive.namelist(), 'settings': archive.read('content/settings.xhtml').decode('utf-8'), 'corruptEntry': archive.testzip()}))"
+    "    print(json.dumps({'manifest': json.loads(archive.read('manifest.json')), 'files': archive.namelist(), 'settings': archive.read('content/preferences.xhtml').decode('utf-8'), 'corruptEntry': archive.testzip()}))"
   ].join("\n"), archive], { encoding: "utf8" });
   assert.ifError(inspected.error);
   assert.equal(inspected.status, 0, inspected.stderr);
@@ -88,12 +88,12 @@ test("current release builds an intact XPI with matching manifest and package me
   assert.equal(packed.corruptEntry, null);
   assert.deepEqual(packed.manifest, manifest);
   assert.equal(packed.manifest.version, metadata.version);
+  assert.equal(packed.manifest.name, "Md2Obsidian");
   assert.equal(new URL(packed.manifest.applications.zotero.update_url).protocol, "https:");
-  assert.ok(packed.settings.includes(`settings.css?v=${encodeURIComponent(manifest.version)}`));
-  assert.ok(packed.settings.includes(`settings.js?v=${encodeURIComponent(manifest.version)}`));
-  assert.ok(!packed.settings.includes("__VERSION__"));
+  assert.ok(packed.settings.includes('id="mineru-obsidian-pane"'));
+  assert.ok(packed.settings.includes('id="mineru-obsidian-schedule-type"'));
   for (const name of ["manifest.json", "bootstrap.js", "src/core.js", "src/engine.js",
-    "src/zotero.js", "content/settings.xhtml", "content/settings.js"]) {
+    "src/zotero.js", "content/preferences.xhtml", "content/settings.css", "content/settings.js", "content/icons/md2obsidian.png"]) {
     assert.ok(packed.files.includes(name), `Missing packaged file: ${name}`);
   }
 });

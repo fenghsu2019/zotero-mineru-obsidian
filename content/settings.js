@@ -1,7 +1,17 @@
 "use strict";
-window.addEventListener("DOMContentLoaded", async () => {
-  const api = window.arguments[0].api;
-  const $ = id => document.getElementById(id);
+(function () {
+  const paneID = "mineru-obsidian-pane";
+  const observer = new MutationObserver(() => {
+    const root = document.getElementById(paneID);
+    if (root) { observer.disconnect(); void init(root); }
+  });
+  const existing = document.getElementById(paneID);
+  if (existing) void init(existing);
+  else observer.observe(document, { childList: true, subtree: true });
+
+async function init(root) {
+  const api = Zotero.MineruObsidianSync;
+  const $ = id => root.querySelector("#mineru-obsidian-" + id);
   let collections = [], visible = [], ruleID = null;
   const selected = new Map();
   const keyOf = c => `${c.libraryID}:${c.collectionKey || c.key}`;
@@ -76,13 +86,29 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("assets").value = rule?.assetsDir || "raw/assets/mineru";
     $("cache").value = rule?.cacheRoot || "";
     $("cache").placeholder = api.defaultCacheRoot();
+    updatePathTitles();
     $("mode-overwrite").checked = rule?.mode !== "protect";
     $("mode-protect").checked = rule?.mode === "protect";
     $("children").checked = rule?.includeSubcollections !== false;
     $("restore").checked = rule?.restoreImages !== false;
     $("auto").checked = !!rule?.autoSync;
-    $("interval").value = rule?.intervalMinutes || 10;
+    $("schedule-type").value = rule?.scheduleType || "interval";
+    $("interval").value = rule?.intervalMinutes ?? 10;
+    $("days").value = rule?.intervalDays ?? 2;
+    $("time").value = rule?.scheduleTime || "09:00";
+    updateScheduleFields();
     renderCollections(); refreshRules();
+  }
+  function updatePathTitles() {
+    for (const id of ["vault", "cache"]) $(id).title = $(id).value || $(id).placeholder;
+  }
+  function updateScheduleFields() {
+    const type = $("schedule-type").value;
+    for (const id of ["interval", "days", "time"]) {
+      const visible = id === "interval" ? type === "interval" : id === "days" ? type === "days" : type !== "interval";
+      $(id).hidden = !visible;
+      $(id + "-label").hidden = !visible;
+    }
   }
   function read() {
     if (!selected.size) throw new Error("请在表格中至少勾选一个 collection。");
@@ -93,19 +119,32 @@ window.addEventListener("DOMContentLoaded", async () => {
       assetsDir: $("assets").value, cacheRoot: $("cache").value,
       mode: $("mode-protect").checked ? "protect" : "overwrite",
       includeSubcollections: $("children").checked, restoreImages: $("restore").checked,
-      autoSync: $("auto").checked, intervalMinutes: Number($("interval").value) };
+      autoSync: $("auto").checked, scheduleType: $("schedule-type").value,
+      intervalMinutes: Number($("interval").value), intervalDays: Number($("days").value),
+      scheduleTime: $("time").value };
   }
   function refreshRules() {
     const rules = api.getRules();
     $("rules").replaceChildren();
     for (const rule of rules) {
-      const button = document.createElement("button"); button.textContent = rule.label;
+      const button = document.createElement("button");
+      const count = Array.isArray(rule.collections) ? rule.collections.length : 1;
+      const title = document.createElement("span"); title.className = "rule-title";
+      title.textContent = count > 1 ? `${count} 个分类` : (rule.label || "1 个分类");
+      button.appendChild(title);
+      if (count > 1) {
+        const detail = document.createElement("span"); detail.className = "rule-detail";
+        detail.textContent = rule.collections[0]?.label || rule.label;
+        button.appendChild(detail);
+      }
+      button.title = rule.label;
+      button.setAttribute("aria-label", rule.label);
       button.setAttribute("aria-pressed", String(rule.id === ruleID));
       button.addEventListener("click", () => fill(rule)); $("rules").appendChild(button);
     }
-    if (!rules.length || !ruleID) {
+    if (!ruleID) {
       const text = document.createElement("span"); text.className = "hint";
-      text.textContent = "未保存的新任务"; $("rules").appendChild(text);
+      text.textContent = "新任务（未保存）"; $("rules").appendChild(text);
     }
     $("remove").disabled = !ruleID;
   }
@@ -113,16 +152,18 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (!report) { status("还没有运行报告。"); return; }
     if (!report.counts) { status("运行失败"); $("report").textContent = JSON.stringify(report, null, 2); return; }
     const c = report.counts;
-    status(`${report.dryRun ? "预览完成（未写入）" : "同步检查结束"} · 新增 ${c.created} · 更新 ${c.updated} · 未变化 ${c.unchanged} · 缺文件 ${c.missing} · 冲突 ${c.conflicts} · 失败 ${c.failed}`);
+    status(`${report.dryRun ? "预览完成（未写入）" : "同步检查结束"} · 新增 ${c.created} · 更新 ${c.updated} · 缺文件 ${c.missing} · 冲突 ${c.conflicts} · 失败 ${c.failed}`);
     const coverage = report.coverage;
     const lines = coverage ? [`扫描 ${coverage.collections} 个 collection，${coverage.parentItems} 篇文献，${coverage.pdfAttachments} 个 PDF 附件；${coverage.itemsWithoutPDF} 篇未附 PDF。`] : [];
-    for (const item of report.items || []) lines.push(`[${item.status}] ${item.title || item.attachmentID}\n  ${item.path || ""}${item.message ? "\n  " + item.message : ""}`);
+    for (const item of report.items || []) if (item.status !== "unchanged") {
+      lines.push(`[${item.status}] ${item.title || item.attachmentID}\n  ${item.path || ""}${item.message ? "\n  " + item.message : ""}`);
+    }
     for (const warning of report.warnings || []) lines.push("提示：" + warning);
     if (!report.dryRun) lines.push("完整报告：" + report.rule.vaultPath + "/.zotero-mineru-sync/last-report.json");
     $("report").textContent = lines.join("\n\n") || "没有可同步的 PDF 附件。";
   }
   async function run(dryRun) {
-    const controls = [...document.querySelectorAll("button, input")].map(el => [el,el.disabled]);
+    const controls = [...root.querySelectorAll("button, input, select")].map(el => [el,el.disabled]);
     try {
       const rule = read(); controls.forEach(([el]) => el.disabled = true);
       status(dryRun ? "正在预览，请稍候…" : "正在同步，请稍候…");
@@ -134,7 +175,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     finally { controls.forEach(([el,disabled]) => el.disabled = disabled); }
   }
   try {
-    collections = await api.listCollections(); fill(null);
+    collections = await api.listCollections(); fill(api.getRules()[0] || null);
+    for (const id of ["vault", "cache"]) $(id).addEventListener("input", updatePathTitles);
+    $("schedule-type").addEventListener("change", updateScheduleFields);
     $("collection-search").addEventListener("input", renderCollections);
     $("selected-only").addEventListener("change", renderCollections);
     $("collection-rows").addEventListener("change", event => {
@@ -154,16 +197,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("clear-selection").addEventListener("click", () => { selected.clear(); renderCollections(); });
     $("new").addEventListener("click", () => fill(null));
     $("save").addEventListener("click", () => {
-      try { const rule = api.saveRule(read()); ruleID = rule.id; refreshRules(); status("配置已保存。" + (rule.autoSync ? "将按设置间隔自动同步。" : "可随时手动同步。")); }
+      try { const rule = api.saveRule(read()); ruleID = rule.id; refreshRules(); status("配置已保存。" + (rule.autoSync ? "将按设定时间自动同步。" : "可随时手动同步。")); }
       catch (error) { showError(error); }
     });
     $("remove").addEventListener("click", () => {
-      try { if (ruleID) api.removeRule(ruleID); fill(null); status("配置已移除，已导出的文件保留。"); }
+      try { if (ruleID) api.removeRule(ruleID); fill(api.getRules()[0] || null); status("配置已移除，已导出的文件保留。"); }
       catch (error) { showError(error); }
     });
     for (const [button, field, title] of [["browse-vault", "vault", "选择 Obsidian 仓库根目录"], ["browse-cache", "cache", "选择 MinerU 缓存根目录"]]) {
       $(button).addEventListener("click", async () => {
-        try { const path = await api.chooseFolder(window, title); if (path) $(field).value = path; }
+        try { const path = await api.chooseFolder(window, title); if (path) { $(field).value = path; updatePathTitles(); } }
         catch (error) { showError(error); }
       });
     }
@@ -171,4 +214,5 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("sync").addEventListener("click", () => run(false));
     $("last").addEventListener("click", () => showReport(api.lastReport));
   } catch (error) { showError(error); }
-});
+}
+})();
