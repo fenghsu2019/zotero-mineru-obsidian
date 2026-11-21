@@ -184,8 +184,42 @@
     return decoded;
   }
 
-  function restoreManifest(text, manifest, references, prefix, restoreImages, warnings) {
-    if (!manifest) return { text, restoredCount: 0, restored: false };
+  function reliableFigureBlock(block) {
+    return block.ambiguous !== true && ["high", "medium"].includes(block.confidence);
+  }
+
+  function restoreCaptionedFigures(text, blocks, existing) {
+    const protectedPositions = protectedRanges(text);
+    const captionOffsets = new Map();
+    const captionPattern = /^(?:(?:(?:supplementary|extended data) +)?(?:fig(?:ure)?\.?|table)|[图表])[ \t]*[a-z]?\d+[a-z]?[ \t]*[.:：．。|｜—–][^\r\n]*/gimu;
+    for (const match of text.matchAll(captionPattern)) {
+      if (protectedPositions.some(([start, end]) => start <= match.index && match.index < end)) continue;
+      captionOffsets.set(match[0], captionOffsets.has(match[0]) ? null : match.index);
+    }
+    const claims = new Map();
+    const candidates = [];
+    for (const block of blocks) {
+      if (!Array.isArray(block.captionHints)) continue;
+      const captions = new Set(block.captionHints.filter(caption => captionOffsets.has(caption)));
+      for (const caption of captions) claims.set(caption, (claims.get(caption) || 0) + 1);
+      if (!reliableFigureBlock(block) || block.imagePaths.length !== 1 || captions.size !== 1) continue;
+      const [caption] = captions;
+      const offset = captionOffsets.get(caption);
+      const [path] = block.imagePaths;
+      if (offset !== null && !existing.has(path)) candidates.push({ caption, offset, path });
+    }
+    const insertions = candidates.filter(({ caption }) => claims.get(caption) === 1)
+      .sort((left, right) => right.offset - left.offset);
+    for (const { offset, path } of insertions) {
+      const before = text.slice(0, offset);
+      const leading = before && !before.endsWith("\n\n") ? "\n" : "";
+      text = before + leading + "![](" + encodePath(path) + ")\n\n" + text.slice(offset);
+    }
+    return { text, restoredCount: insertions.length, needsMarkerSpacing: false };
+  }
+
+  function restoreManifest(text, manifest, references, prefix, restoreImages, warnings, filenameCaseChanged) {
+    if (!manifest) return { text, restoredCount: 0, needsMarkerSpacing: false };
     if (typeof manifest !== "object" || Array.isArray(manifest)) fail("Invalid MinerU manifest");
     const existing = new Set(references.map(ref => imagePath(ref.value, prefix, [])).filter(Boolean));
     const blocks = manifest.figureBlocks;
@@ -194,10 +228,9 @@
       if (!existing.size && Array.isArray(manifest.allFigures) && manifest.allFigures.length) {
         fail("Manifest lists figures but has no reliable figureBlocks or Markdown image references");
       }
-      return { text, restoredCount: 0, restored: false };
+      return { text, restoredCount: 0, needsMarkerSpacing: false };
     }
-    const missing = [];
-    for (const block of blocks) {
+    const normalizedBlocks = blocks.map(block => {
       if (!block || typeof block !== "object" || !Array.isArray(block.imagePaths) || !block.imagePaths.length) {
         fail("Malformed manifest figure block or missing imagePaths");
       }
@@ -206,9 +239,24 @@
         if (!safe.startsWith("images/")) fail("Unsafe manifest image path: " + path);
         return safe;
       });
-      if (paths.some(path => !existing.has(path))) missing.push({ ...block, imagePaths: paths });
+      return { ...block, imagePaths: paths };
+    });
+    const missing = normalizedBlocks.filter(block => block.imagePaths.some(path => !existing.has(path)));
+    if (!missing.length) return { text, restoredCount: 0, needsMarkerSpacing: false };
+    const original = text;
+    function restoreWithoutOffsets(reason) {
+      const result = restoreImages && (manifest.totalChars === original.length || manifest.totalChars === Array.from(original).length)
+        ? restoreCaptionedFigures(original, normalizedBlocks, existing)
+        : { text: original, restoredCount: 0, needsMarkerSpacing: false };
+      warnings.push("Skipped MinerU figure restoration from offsets because " + reason + ". " +
+        "Restored " + result.restoredCount + " image references from unique captions.");
+      return result;
     }
-    if (!missing.length) return { text, restoredCount: 0, restored: false };
+    if (missing.some(block => !reliableFigureBlock(block))) {
+      // Offsets refer to the pre-strip Markdown, including preceding markers and
+      // line breaks. After an uncertain block, a unique caption is a safer anchor.
+      return restoreWithoutOffsets("at least one missing block is ambiguous, low-confidence, or unclassified");
+    }
     if (!restoreImages) fail("Manifest images are missing and automatic restoration is disabled");
     if (existing.size) fail("Markdown contains only some manifest images; refusing ambiguous partial restoration");
     const codepoints = Array.from(text).length;
@@ -219,13 +267,11 @@
     const count = value => mode === "utf16" ? value.length : Array.from(value).length;
     const insertions = missing.sort((a, b) => a.markdownStart - b.markdownStart);
     const seenStarts = new Set();
+    const offsetWarnings = [];
     let restoredCount = 0;
     // Offsets describe the progressively restored string. markdownEnd may include
     // a caption, so never remove markdownEnd - markdownStart characters.
     for (const block of insertions) {
-      if (block.ambiguous === true || !["high", "medium"].includes(block.confidence)) {
-        fail("Ambiguous, low-confidence, or unclassified manifest figure block");
-      }
       if (!Number.isInteger(block.markdownStart) || !Number.isInteger(block.markdownEnd) || block.markdownStart < 0 || block.markdownEnd < block.markdownStart) {
         fail("Invalid manifest figure offsets");
       }
@@ -237,20 +283,26 @@
         // Match the existing resolver's bounded whitespace-only repair.
         if (gap > 64) fail("Manifest insertion offset exceeds progressively restored Markdown length by more than 64 characters");
         text += "\n".repeat(gap);
-        warnings.push("Padded " + gap + " trailing line breaks to match a MinerU figure offset");
+        offsetWarnings.push("Padded " + gap + " trailing line breaks to match a MinerU figure offset");
       }
       let offset = block.markdownStart;
       if (mode === "codepoint") offset = Array.from(text).slice(0, offset).join("").length;
       if (offset > 0 && /[\uD800-\uDBFF]/.test(text[offset - 1]) && /[\uDC00-\uDFFF]/.test(text[offset])) {
         fail("Manifest insertion offset splits a Unicode surrogate pair");
       }
+      // Check for shifted offsets in newly accepted caches without regenerating
+      // previously synced notes whose filenames already matched.
+      if (filenameCaseChanged && offset > 0 && offset < text.length &&
+          /[\p{L}\p{N}]{2}/u.test(text.slice(offset - 1, offset + 1))) {
+        return restoreWithoutOffsets("an offset in the case-renamed cache falls inside a word");
+      }
       if (protectedRanges(text).some(([start, end]) => start < offset && offset < end)) fail("Manifest would insert an image inside a code block");
       const marker = block.imagePaths.map(path => "![](" + path + ")").join("\n\n");
       text = text.slice(0, offset) + marker + text.slice(offset);
       restoredCount += block.imagePaths.length;
     }
-    warnings.push("Restored " + restoredCount + " image references from validated manifest offsets (" + mode + ")");
-    return { text, restoredCount, restored: true };
+    warnings.push(...offsetWarnings, "Restored " + restoredCount + " image references from validated manifest offsets (" + mode + ")");
+    return { text, restoredCount, needsMarkerSpacing: true };
   }
 
   function frontmatter(metadata, sourceFilename) {
@@ -278,19 +330,22 @@
 
   function render({ markdown, manifest = null, sourceFilename = "", attachmentFilename = "", metadata = {}, imagePrefix, restoreImages = true }) {
     if (typeof markdown !== "string") fail("markdown must be a string");
-    if (sourceFilename && attachmentFilename && sourceFilename.normalize("NFC") !== attachmentFilename.normalize("NFC")) {
+    const sourceName = sourceFilename ? sourceFilename.normalize("NFC") : "";
+    const attachmentName = attachmentFilename ? attachmentFilename.normalize("NFC") : "";
+    const filenameCaseChanged = !!(sourceName && attachmentName && sourceName !== attachmentName);
+    if (filenameCaseChanged && sourceName.toLowerCase() !== attachmentName.toLowerCase()) {
       fail("MinerU source filename does not match the selected PDF attachment");
     }
     const prefix = prefixPath(imagePrefix);
     const warnings = [];
     let body = markdown.replace(/^---\nmineru_sync: 1\n[\s\S]*?\n---\n\n/, "");
     const initial = scanImages(body);
-    const restored = restoreManifest(body, manifest, initial, prefix, restoreImages, warnings);
+    const restored = restoreManifest(body, manifest, initial, prefix, restoreImages, warnings, filenameCaseChanged);
     body = restored.text;
     let refs = scanImages(body);
     // Recovered markers must occupy Markdown blocks, but only do this after all
     // progressive offsets have been consumed. Existing source layout is retained.
-    if (restored.restored) {
+    if (restored.needsMarkerSpacing) {
       const blocks = refs.filter(ref => ref.kind === "markdown").sort((a, b) => b.fullStart - a.fullStart);
       for (const ref of blocks) {
         const before = body.slice(0, ref.fullStart), after = body.slice(ref.fullEnd);

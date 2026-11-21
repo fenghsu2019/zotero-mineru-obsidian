@@ -303,3 +303,42 @@ test('real Markdown core integrates relative links, metadata, and manifest resto
     assert.equal(second.counts.imagesCopied, 0);
   } finally { globalThis.MineruSyncCore = stub; }
 });
+
+test('real Markdown core syncs an uncertain manifest and case-only filename difference', async t => {
+  const f = await fixture(t);
+  const stub = globalThis.MineruSyncCore;
+  globalThis.MineruSyncCore = require('../src/core.js');
+  t.after(() => { globalThis.MineruSyncCore = stub; });
+
+  const cache = path.join(f.cacheRoot, '10');
+  const original = '# Paper\n\n![Figure](images/figure.png)\n\nUnlocated figure caption.\n\nConclusion.\n';
+  await fs.writeFile(path.join(cache, 'full.md'), original);
+  await fs.writeFile(path.join(cache, '_llm_source.json'), JSON.stringify({sourceFilename: 'example paper.PDF'}));
+  await fs.writeFile(path.join(cache, 'manifest.json'), JSON.stringify({
+    totalChars: original.length,
+    figureBlocks: [{imagePaths: ['images/unlocated.png'], confidence: 'low', ambiguous: true}]
+  }));
+  await fs.writeFile(path.join(cache, 'images', 'unlocated.png'), new Uint8Array([5]));
+  const before = await filesUnder(f.cacheRoot);
+
+  const preview = await sync({...f.options, dryRun: true});
+  assert.equal(preview.counts.created, 1);
+  assert.match(preview.warnings.join('\n'), /Skipped MinerU figure restoration/);
+  assert.deepEqual(await filesUnder(f.vaultPath), []);
+
+  const first = await sync(f.options);
+  assert.equal(first.counts.created, 1);
+  assert.equal(first.counts.restored, 0);
+  assert.equal(first.counts.imagesCopied, 1);
+  assert.match(first.items[0].warnings.join('\n'), /Skipped MinerU figure restoration/);
+  const text = await fs.readFile(f.note, 'utf8');
+  assert.match(text, /source_file: "example paper\.PDF"/);
+  assert.ok(text.endsWith(original.replace('images/figure.png', '../assets/1-ABCDEFGH/images/figure.png')));
+  assert.deepEqual(Array.from(await fs.readFile(f.asset)), [1, 2, 3, 4]);
+  assert.equal(await f.io.exists(path.join(path.dirname(f.asset), 'unlocated.png')), false);
+
+  const writeCount = f.calls.writes;
+  assert.equal((await sync(f.options)).counts.unchanged, 1);
+  assert.equal(f.calls.writes, writeCount);
+  assert.deepEqual(await filesUnder(f.cacheRoot), before);
+});

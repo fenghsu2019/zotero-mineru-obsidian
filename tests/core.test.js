@@ -142,12 +142,10 @@ test("bounded trailing whitespace repair matches the existing MinerU resolver", 
   assert.ok(result.warnings.some(message => message.includes("8 trailing line breaks")));
 });
 
-test("restoration rejects stale, ambiguous, low-confidence and unsupported manifests", () => {
+test("restoration rejects stale, unsafe and unsupported manifests", () => {
   const source = "Caption";
   const manifests = [
     { totalChars: 100, figureBlocks: [block(0, "images/a.png")] },
-    { totalChars: source.length, figureBlocks: [block(0, "images/a.png", { ambiguous: true })] },
-    { totalChars: source.length, figureBlocks: [block(0, "images/a.png", { confidence: "low" })] },
     { totalChars: source.length, figureBlocks: [block(0, "images/../a.png")] },
     { totalChars: source.length, figureBlocks: [block(500, "images/a.png")] },
     { totalChars: source.length, figureBlocks: [block(0, "images/a.png"), block(0, "images/b.png")] },
@@ -155,6 +153,63 @@ test("restoration rejects stale, ambiguous, low-confidence and unsupported manif
   ];
   for (const manifest of manifests) assert.throws(() => render(source, { manifest }));
   assert.throws(() => render(source, { manifest: { totalChars: source.length, figureBlocks: [block(0, "images/a.png")] }, restoreImages: false }), /disabled/);
+});
+
+test("uncertain missing figure blocks preserve the full Markdown with a warning", () => {
+  const source = "Opening paragraph.\n\nFigure caption.\n\nConclusion.\n";
+  for (const uncertainty of [{ ambiguous: true }, { confidence: "low" }, { confidence: undefined }]) {
+    const manifest = {
+      totalChars: source.length,
+      figureBlocks: [block(source.indexOf("Figure caption"), "images/a.png", uncertainty)]
+    };
+    const result = render(source, { manifest });
+    assert.equal(body(result.text), source);
+    assert.deepEqual(result.imagePaths, []);
+    assert.equal(result.restoredCount, 0);
+    assert.match(result.warnings.join("\n"), /^Skipped MinerU figure restoration/);
+  }
+});
+
+test("uncertain missing figure blocks preserve existing figure references", () => {
+  const source = "Intro\n\n![Existing](images/a.png)\n\nCaption\n";
+  const manifest = { totalChars: source.length, figureBlocks: [block(0, "images/a.png"), block(50, "images/b.png", { confidence: "low" })] };
+  const result = render(source, { manifest });
+  assert.equal(body(result.text), source.replace("images/a.png", "assets/ABC123/images/a.png"));
+  assert.deepEqual(result.imagePaths, ["images/a.png"]);
+  assert.equal(result.referenceCount, 1);
+  assert.equal(result.restoredCount, 0);
+  assert.match(result.warnings.join("\n"), /^Skipped MinerU figure restoration/);
+});
+
+test("mixed-confidence manifests restore only unambiguously matched numbered captions", () => {
+  const unique = "Fig. 1. Unique caption.";
+  const repeated = "Fig. 2. Repeated caption.";
+  const uncertain = "Fig. 3. Uncertain caption.";
+  const shared = "Fig. 4. Shared caption.";
+  const source = ["Opening.", unique, repeated, uncertain, shared, repeated, "Conclusion.\n"].join("\n\n");
+  const manifest = {
+    totalChars: source.length,
+    figureBlocks: [
+      block(0, "images/unique.png", { captionHints: [unique] }),
+      block(0, "images/repeated.png", { captionHints: [repeated] }),
+      block(0, "images/uncertain.png", { captionHints: [uncertain, shared], confidence: "low" }),
+      block(0, "images/shared.png", { captionHints: [shared] })
+    ]
+  };
+  const result = render(source, { manifest });
+  assert.equal(body(result.text), source.replace(unique, "![](assets/ABC123/images/unique.png)\n\n" + unique));
+  assert.deepEqual(result.imagePaths, ["images/unique.png"]);
+  assert.equal(result.restoredCount, 1);
+  assert.ok(result.warnings.some(message => message.startsWith("Skipped MinerU figure restoration")));
+});
+
+test("uncertain blocks do not bypass manifest image path validation", () => {
+  const source = "Caption";
+  const manifest = {
+    totalChars: source.length,
+    figureBlocks: [block(0, "images/a.png", { confidence: "low" }), block(0, "images/../b.png", { ambiguous: true })]
+  };
+  assert.throws(() => render(source, { manifest }), /Unsafe relative path/);
 });
 
 test("already present figure markers need no restoration, even if their manifest location is ambiguous", () => {
@@ -165,6 +220,24 @@ test("already present figure markers need no restoration, even if their manifest
 
 test("does not silently export partially missing image markers", () => {
   assert.throws(() => render("![](images/a.png)", { manifest: { figureBlocks: [block(0, "images/a.png"), block(50, "images/b.png")] } }), /partial restoration/);
+});
+
+test("attachment source filename accepts case and Unicode normalization differences", () => {
+  const result = render("Text", { sourceFilename: "CAFÉ Paper.PDF", attachmentFilename: "Cafe\u0301 paper.pdf" });
+  assert.equal(body(result.text), "Text");
+  assert.match(result.text, /source_file: "CAFÉ Paper\.PDF"/);
+});
+
+test("a newly accepted case-renamed cache cannot insert figures within a word", () => {
+  const caption = "Fig. 1. Study area.";
+  const source = "Introduction.\n\n" + caption;
+  const result = render(source, {
+    sourceFilename: "Paper.PDF",
+    manifest: { totalChars: source.length, figureBlocks: [block(3, "images/a.png", { captionHints: [caption] })] }
+  });
+  assert.equal(body(result.text), source.replace(caption, "![](assets/ABC123/images/a.png)\n\n" + caption));
+  assert.equal(result.restoredCount, 1);
+  assert.ok(result.warnings.some(message => message.includes("falls inside a word")));
 });
 
 test("attachment source filename mismatch fails before export", () => {

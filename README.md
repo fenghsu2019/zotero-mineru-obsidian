@@ -23,7 +23,7 @@ Obsidian 中的 wiki 页面
 
 ## 安装与第一次同步
 
-1. 从 [GitHub Releases](https://github.com/fenghsu2019/zotero-mineru-obsidian/releases/latest) 的 **Assets** 下载 `mineru-obsidian-sync-0.2.7.xpi`。已安装旧版时，从文件安装新版即可升级；已有同步配置保留。
+1. 在 **Assets** 中下载 `mineru-obsidian-sync-0.2.8.xpi`。从文件安装新版即可升级，已有同步配置保留。 [GitHub Releases](https://github.com/fenghsu2019/zotero-mineru-obsidian/releases/tag/v0.2.8)
 2. 在 Zotero 中打开 **工具 → 插件**，点击齿轮，选择 **从文件安装插件**，选中该 XPI。
 3. 打开 **Zotero → 设置 → Md2Obsidian**（macOS；Windows/Linux 在 **编辑 → 设置**）。工具菜单和 collection 右键菜单也能直达该设置面板。
 4. 在表格中勾选一个或多个 collection，再选择已存在的 Obsidian 仓库根目录。默认 Markdown 子目录为 `raw/papers`，图片子目录为 `raw/assets/mineru`，可以修改。
@@ -87,9 +87,9 @@ Markdown 文件名为 `<PDF stem>--<libraryID>-<attachmentKey>.md`。文件名�
 
 仅复制 Markdown 中实际引用的本地图片，支持常用 Markdown 图片、引用式图片和 HTML `img`。不会盲目复制缓存 `images/` 里的全部文件。远程图片链接保留，插件不会下载这些图片。
 
-较新缓存如果缺少图片标记，可根据 `manifest.json` 中可验证的图片位置恢复。来源文件名不匹配、位置不兼容、歧义、低置信度、只缺一部分图片标记等情况会拒绝该附件的导出。缺少被引用的图片也会拒绝该附件，避免生成带有已知断图的正文；其他附件仍可继续处理。关闭自动恢复并不会允许静默忽略 manifest 中已知缺失的图片。
+较新缓存如果缺少图片标记，插件可按 `manifest.json` 中经过校验的位置恢复。缺失图块存在歧义或置信度不足时，插件仍会同步 `full.md` 中的正文和已有图片引用。启用图片恢复时，可信的单图图块如果与正文中的唯一编号图注精确匹配，可按图注恢复。同步报告会记录图片恢复受限的原因和数量。
 
-图片恢复依赖现有 manifest 的文件名、字符长度、位置和置信度校验。这能发现多种过时或不匹配缓存，但不能证明 MinerU 识别出的内容与原 PDF 完全一致，恢复结果仍值得抽查。插件保持 Zotero 缓存原样。
+缓存记录和 Zotero 附件的文件名按 Unicode NFC 规范化后忽略大小写比较，其他文件名差异仍会阻止同步。图片恢复仍校验正文长度和插入位置。大小写有差异的缓存如果出现落在单词内的偏移，也会改用图注定位。待导出正文引用的本地图片文件缺失时，插件会拒绝导出该附件。插件保持 Zotero 缓存原样。
 
 运行结果可在面板查看；实际同步结束后尝试写入 `.zotero-mineru-sync/last-report.json`。报告不列出未变化的附件及其数量。`missing` 表示缓存或图片缺失，`conflict` 表示目标内容冲突，`failed` 表示路径、manifest、状态文件或写入等其他错误。查看具体条目的错误原因后处理，再运行预览。
 
